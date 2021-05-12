@@ -20,7 +20,6 @@ package aws
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -44,7 +43,6 @@ const (
 	resourceTypeVolume   = "volume"
 	// awsEBSDriverName is the name of the CSI driver for EBS
 	awsEBSDriverName = "ebs.csi.aws.com"
-	awsPlacement     = "machine.sapcloud.io/awsPlacement"
 )
 
 // NewAWSDriver returns an empty AWSDriver object
@@ -63,12 +61,6 @@ func (d *Driver) CreateMachine(ctx context.Context, req *driver.CreateMachineReq
 		secret       = req.Secret
 		machineClass = req.MachineClass
 	)
-
-	// Check if the MachineClass is for the supported cloud provider
-	if req.MachineClass.Provider != ProviderAWS {
-		err := fmt.Errorf("Requested for Provider '%s', we only support '%s'", req.MachineClass.Provider, ProviderAWS)
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
 
 	// Log messages to track request
 	klog.V(3).Infof("Machine creation request has been recieved for %q", req.Machine.Name)
@@ -136,13 +128,6 @@ func (d *Driver) CreateMachine(ctx context.Context, req *driver.CreateMachineReq
 	}
 
 	// Specify the details of the machine that you want to create.
-	iam := &ec2.IamInstanceProfileSpecification{}
-	if len(providerSpec.IAM.Name) > 0 {
-		iam.Name = &providerSpec.IAM.Name
-	} else if len(providerSpec.IAM.ARN) > 0 {
-		iam.Arn = &providerSpec.IAM.ARN
-	}
-
 	inputConfig := ec2.RunInstancesInput{
 		BlockDeviceMappings: blkDeviceMappings,
 		ImageId:             aws.String(providerSpec.AMI),
@@ -151,9 +136,11 @@ func (d *Driver) CreateMachine(ctx context.Context, req *driver.CreateMachineReq
 		MaxCount:            aws.Int64(1),
 		UserData:            &UserDataEnc,
 		KeyName:             aws.String(providerSpec.KeyName),
-		IamInstanceProfile:  iam,
-		NetworkInterfaces:   networkInterfaceSpecs,
-		TagSpecifications:   []*ec2.TagSpecification{tagInstance, tagVolume},
+		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
+			Name: &(providerSpec.IAM.Name),
+		},
+		NetworkInterfaces: networkInterfaceSpecs,
+		TagSpecifications: []*ec2.TagSpecification{tagInstance, tagVolume},
 	}
 
 	// Set the AWS Capacity Reservation target. Using an 'open' preference means that if the reservation is not found, then
@@ -166,22 +153,16 @@ func (d *Driver) CreateMachine(ctx context.Context, req *driver.CreateMachineReq
 					CapacityReservationResourceGroupArn: providerSpec.CapacityReservationTarget.CapacityReservationResourceGroupArn,
 				},
 			}
-		} else if providerSpec.CapacityReservationTarget.CapacityReservationID != nil {
+		} else if providerSpec.CapacityReservationTarget.CapacityReservationId != nil {
 			inputConfig.CapacityReservationSpecification = &ec2.CapacityReservationSpecification{
 				CapacityReservationPreference: aws.String("open"),
 				CapacityReservationTarget: &ec2.CapacityReservationTarget{
-					CapacityReservationId: providerSpec.CapacityReservationTarget.CapacityReservationID,
+					CapacityReservationId: providerSpec.CapacityReservationTarget.CapacityReservationId,
 				},
 			}
 		}
 	}
 
-	placement, err := getPlacementObj(req)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	} else if placement != nil {
-		inputConfig.Placement = placement
-	}
 	// Set spot price if it has been set
 	if providerSpec.SpotPrice != nil {
 		inputConfig.InstanceMarketOptions = &ec2.InstanceMarketOptionsRequest{
@@ -210,38 +191,12 @@ func (d *Driver) CreateMachine(ctx context.Context, req *driver.CreateMachineReq
 	return response, nil
 }
 
-//returns Placement Object required in ec2.RunInstancesInput
-func getPlacementObj(req *driver.CreateMachineRequest) (*ec2.Placement, error) {
-	placementobj := &ec2.Placement{}
-
-	requestAnnotations := req.Machine.Spec.NodeTemplateSpec.ObjectMeta.Annotations
-
-	if placementAnnotation, ok := requestAnnotations[awsPlacement]; ok && placementAnnotation != "" {
-		placementAnnotationsRaw := []byte(placementAnnotation)
-		if err := json.Unmarshal(placementAnnotationsRaw, placementobj); err != nil {
-			return nil, err
-		}
-	}
-
-	if *placementobj == (ec2.Placement{}) {
-		return nil, nil
-	}
-	return placementobj, nil
-}
-
 // DeleteMachine handles a machine deletion request
 func (d *Driver) DeleteMachine(ctx context.Context, req *driver.DeleteMachineRequest) (*driver.DeleteMachineResponse, error) {
 	var (
 		err    error
 		secret = req.Secret
 	)
-
-	// Check if the MachineClass is for the supported cloud provider
-	if req.MachineClass.Provider != ProviderAWS {
-		err := fmt.Errorf("Requested for Provider '%s', we only support '%s'", req.MachineClass.Provider, ProviderAWS)
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-
 	// Log messages to track delete request
 	klog.V(3).Infof("Machine deletion request has been recieved for %q", req.Machine.Name)
 	defer klog.V(3).Infof("Machine deletion request has been processed for %q", req.Machine.Name)
@@ -305,12 +260,6 @@ func (d *Driver) GetMachineStatus(ctx context.Context, req *driver.GetMachineSta
 		machineClass = req.MachineClass
 	)
 
-	// Check if the MachineClass is for the supported cloud provider
-	if req.MachineClass.Provider != ProviderAWS {
-		err := fmt.Errorf("Requested for Provider '%s', we only support '%s'", req.MachineClass.Provider, ProviderAWS)
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-
 	// Log messages to track start and end of request
 	klog.V(3).Infof("Get request has been recieved for %q", req.Machine.Name)
 
@@ -350,12 +299,6 @@ func (d *Driver) ListMachines(ctx context.Context, req *driver.ListMachinesReque
 		machineClass = req.MachineClass
 		secret       = req.Secret
 	)
-
-	// Check if the MachineClass is for the supported cloud provider
-	if req.MachineClass.Provider != ProviderAWS {
-		err := fmt.Errorf("Requested for Provider '%s', we only support '%s'", req.MachineClass.Provider, ProviderAWS)
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
 
 	// Log messages to track start and end of request
 	klog.V(3).Infof("List machines request has been recieved for %q", machineClass.Name)
