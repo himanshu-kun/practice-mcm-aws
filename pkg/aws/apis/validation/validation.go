@@ -49,8 +49,8 @@ func ValidateAWSProviderSpec(spec *awsapi.AWSProviderSpec, secret *corev1.Secret
 	if "" == spec.MachineType {
 		allErrs = append(allErrs, field.Required(fldPath.Child("machineType"), "MachineType is required"))
 	}
-	if ("" == spec.IAM.Name && "" == spec.IAM.ARN) || ("" != spec.IAM.Name && "" != spec.IAM.ARN) {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("iam"), spec.IAM, "either IAM Name or ARN must be set"))
+	if "" == spec.IAM.Name {
+		allErrs = append(allErrs, field.Required(fldPath.Child("iam.name"), "IAM Name is required"))
 	}
 	if "" == spec.KeyName {
 		allErrs = append(allErrs, field.Required(fldPath.Child("keyName"), "KeyName is required"))
@@ -151,7 +151,7 @@ func validateCapacityReservations(capacityReservation *awsapi.AWSCapacityReserva
 	)
 
 	if capacityReservation != nil {
-		if capacityReservation.CapacityReservationID != nil && capacityReservation.CapacityReservationResourceGroupArn != nil {
+		if capacityReservation.CapacityReservationId != nil && capacityReservation.CapacityReservationResourceGroupArn != nil {
 			allErrs = append(allErrs, field.Required(fldPath, "capacityReservationResourceGroupArn or capacityReservationId are optional but only one should be used"))
 		}
 	}
